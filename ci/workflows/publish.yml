@@ -1,0 +1,42 @@
+name: publish
+
+# Publishes to npm when a GitHub release is published, through npm Trusted
+# Publishing (GitHub Actions OIDC). There is no npm token in this repository:
+# npm trusts this workflow by its file name, so keep it named publish.yml, and
+# keep the environment name in step with the trusted publisher settings on
+# npmjs.com.
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: npm-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - name: npm 11.5.1 or newer (Trusted Publishing)
+        run: npm install -g npm@latest
+      - name: Release tag matches the package version
+        run: |
+          v=$(node -p "require('./package.json').version")
+          test "${GITHUB_REF_NAME#v}" = "$v" || { echo "tag $GITHUB_REF_NAME does not match version $v"; exit 1; }
+          grep -q "const VERSION = '$v'" bin/indianopinion.mjs
+          grep -q "IO_SH_VERSION=$v" io.sh
+      - run: node --test test/*.test.mjs
+      - run: npm publish --access public
