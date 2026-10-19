@@ -7,26 +7,31 @@ MIT licensed. The MCP server this CLI bridges to is at https://github.com/Indian
 
 ## Install
 
-```sh
-npm i -g indianopinion                 # from the npm registry, once 0.2.0 is published
-npx --yes indianopinion briefs --q "monsoon"
-```
-
-The same package is also served from the site, which works before and independently of npm:
+The package is not on the npm registry yet (the first publish is pending), so install it from this
+repository or from the site:
 
 ```sh
-npm i -g https://indianopinion.org/agents/cli/latest.tgz
+npm i -g github:IndianOpinion/cli                         # this repository, the newest release
+npm i -g https://indianopinion.org/agents/cli/latest.tgz   # the copy the site serves
+npx --yes github:IndianOpinion/cli briefs --q "monsoon"   # run once without installing
 ```
 
 Check a site download against `https://indianopinion.org/agents/cli/SHA256SUMS` or `latest.json`
-(`{version, url, sha256}`). Registry releases carry npm provenance that links each version to the
-GitHub Actions run in this repository that built it.
+(`{version, url, sha256}`). After the first npm publish, `npm i -g indianopinion` and
+`npx --yes indianopinion` work too, and registry releases carry npm provenance that links each version
+to the GitHub Actions run in this repository that built it.
 
-Without Node, `io.sh` covers the same commands except `mcp` and `skill` (bash and curl; jq optional):
+Without Node, `io.sh` covers the same commands and flags except `mcp` and `skill` (bash and curl):
 
 ```sh
-curl -fsSL https://indianopinion.org/agents/cli/io.sh -o ~/bin/io && chmod +x ~/bin/io
+mkdir -p ~/bin && curl -fsSL https://indianopinion.org/agents/cli/io.sh -o ~/bin/io && chmod +x ~/bin/io
+~/bin/io briefs --q monsoon --limit 3      # or add ~/bin to PATH and run io
 ```
+
+With jq installed, `io.sh` prints the same JSON as the CLI; without jq it prints the API's JSON
+unchanged, and the few flags that need reshaping (`digest --limit`, `breaking recent --limit` or
+`--would-send`, `brief --include`) say they need jq. A flag a command does not take is a usage error
+(exit 2) in both.
 
 ## Use
 
@@ -40,7 +45,8 @@ indianopinion topics follow "Supreme Court" --tier instant
 indianopinion breaking recent --days 7
 indianopinion breaking set --threshold 0.4 --composite mean --max-per-day 3
 indianopinion prefs set --format text --hour 7
-indianopinion unsubscribe --what digest --yes
+indianopinion unsubscribe --what all --yes                 # stop every email
+indianopinion account close --yes                          # close the account (see below)
 indianopinion token list
 indianopinion mcp                  # stdio MCP bridge to https://indianopinion.org/mcp
 indianopinion skill install        # writes ~/.claude/skills/indianopinion/SKILL.md
@@ -48,8 +54,19 @@ indianopinion doctor
 indianopinion --help --json        # every command and flag, machine-readable
 ```
 
-Verifying an address subscribes it to the daily digest (plain text, 7 am India time by default);
-`unsubscribe --what digest --yes` stops it.
+Verifying a new address switches on the daily digest and Breaking News: the digest in plain text at
+7 am India time by default, Breaking News at most 5 a day under the default rule. `unsubscribe --what all --yes`
+stops both, topic alerts and reminders; `--what digest` or `--what breaking` stops one. An address that
+already had an account keeps its own settings.
+
+`account close --yes` closes the account: every token is revoked, every email stops and the address can
+no longer sign in. It is deactivation, not deletion: the account record is kept, deactivated, under the
+retention terms of https://indianopinion.org/privacy-policy/. To ask for erasure, a copy of your data or
+reopening, write to hello@indianopinion.org.
+
+Every command rejects a flag or extra word it does not take (exit 2), `--since` and `--until` must be
+ISO 8601 (exit 6), and `brief --include` takes only `brief`, `analysis`, `coverage` and `sources`
+(exit 6).
 
 Output is JSON when stdout is not a terminal, or with `--json`; text on a terminal or with `--text`.
 Errors go to stderr (a JSON object in JSON mode).
@@ -90,8 +107,8 @@ npm test
 
 They run the CLI and `io.sh` against a local stub of the REST API (`test/stub-rest.mjs`). No network.
 The MCP bridge test also runs the io-mcp Worker when its source is found: set `IO_MCP_DIR`, or clone
-https://github.com/IndianOpinion/mcp next to this checkout as `../mcp` (and run `npm ci` there).
-Otherwise that one test is skipped.
+https://github.com/IndianOpinion/mcp next to this checkout as `../mcp` and run `npm ci` there.
+Without the source, or without its `node_modules`, that one test is skipped with a hint.
 
 ## Releasing
 
@@ -104,7 +121,7 @@ One-time setup (an npm owner of the package, on npmjs.com):
    `.github/workflows/publish.yml` is on `main`.
 
 1. Publish the first version by hand, because npm attaches trusted publisher settings to an existing
-   package. From a clean checkout of the `v0.2.0` tag, on your own machine with 2FA on:
+   package. From a clean checkout of the newest release tag (`v0.2.1`), on your own machine with 2FA on:
    `npm login`, `npm test`, `npm pack --dry-run` (expect `bin/indianopinion.mjs`, `skill/SKILL.md`,
    `README.md`, `LICENSE`, `CHANGELOG.md`, `package.json`), then `npm publish --access public`.
    `publishConfig.provenance` only applies in CI; a local publish ignores it with a warning, or pass
@@ -127,3 +144,8 @@ Each release after that:
 
 The copy served at `https://indianopinion.org/agents/cli/` is rebuilt from a release by the
 maintainers when the MCP Worker is deployed.
+
+## Security and contributing
+
+Report a vulnerability privately to hello@indianopinion.org (see [SECURITY.md](SECURITY.md)), never in a
+public issue. How to propose a change: [CONTRIBUTING.md](CONTRIBUTING.md).

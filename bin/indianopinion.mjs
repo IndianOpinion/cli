@@ -14,7 +14,7 @@ import os from 'node:os';
 import path from 'node:path';
 import readline from 'node:readline';
 
-const VERSION = '0.2.0';
+const VERSION = '0.2.1';
 const DOCS = 'https://indianopinion.org/agents/';
 const UA = `indianopinion-cli/${VERSION} (+${DOCS})`;
 const DEFAULT_API = 'https://indianopinion.org/wp-json/io/v1';
@@ -45,6 +45,90 @@ function parseArgs(argv) {
     else pos.push(a);
   }
   return { pos, flags };
+}
+
+// Every command's flags and how many positional words it takes after the command (and
+// subcommand). Anything else is a usage error, exit 2 (#2): an agent that mistypes or invents
+// a flag gets told, instead of a plausible unfiltered answer.
+export const GLOBAL_FLAGS = ['json', 'text', 'help', 'version', 'token', 'api'];
+export const SPEC = {
+  'login start': { flags: ['email', 'name', 'operator-url', 'purpose'], pos: 0 },
+  'login verify': { flags: ['email', 'code', 'label'], pos: 0 },
+  me: { flags: [], pos: 0 },
+  digest: { flags: ['date', 'limit'], pos: 1 },
+  briefs: { flags: ['q', 'category', 'since', 'until', 'limit', 'cursor'], pos: 0 },
+  brief: { flags: ['include'], pos: 1 },
+  'topics list': { flags: ['limit'], pos: 0 },
+  'topics follow': { flags: ['key', 'id', 'tier'], pos: Infinity },
+  'topics unfollow': { flags: [], pos: 1 },
+  'breaking status': { flags: [], pos: 0 },
+  'breaking set': { flags: ['threshold', 'composite', 'max-per-day', 'on', 'off'], pos: 0 },
+  'breaking recent': { flags: ['days', 'limit', 'would-send', 'cursor'], pos: 0 },
+  'breaking show': { flags: [], pos: 1 },
+  'prefs get': { flags: [], pos: 0 },
+  'prefs set': { flags: ['format', 'hour', 'tz', 'digest', 'nudges'], pos: 0 },
+  unsubscribe: { flags: ['what', 'yes'], pos: 1 },
+  'token list': { flags: [], pos: 0 },
+  'token new': { flags: ['label'], pos: 0 },
+  'token revoke': { flags: ['yes'], pos: 1 },
+  'browser-link': { flags: [], pos: 0 },
+  'account close': { flags: ['yes'], pos: 0 },
+  mcp: { flags: ['url'], pos: 0 },
+  'skill install': { flags: ['dir', 'print'], pos: 0 },
+  doctor: { flags: [], pos: 0 },
+};
+const DEFAULT_SUB = { topics: 'list', breaking: 'status', prefs: 'get', token: 'list' };
+
+/** Throws a usage CliError for a flag or positional word the command does not take. */
+export function checkArgs(cmd, sub, rest, flags) {
+  let key = `${cmd} ${sub || DEFAULT_SUB[cmd] || ''}`.trim();
+  let pos = rest;
+  if (!SPEC[key]) {
+    if (!SPEC[cmd]) return; // unknown command or subcommand: the command itself says so
+    key = cmd;
+    pos = [sub, ...rest].filter((x) => x !== undefined);
+  }
+  const spec = SPEC[key];
+  const allowed = [...spec.flags, ...GLOBAL_FLAGS];
+  for (const k of Object.keys(flags)) {
+    if (!allowed.includes(k)) {
+      throw new CliError(EXIT.usage, 'usage', `Unknown flag --${k} for "${key}". It takes: ${spec.flags.length ? spec.flags.map((f) => `--${f}`).join(', ') : 'no flags'} (and --json, --text, --token, --api).`, { flag: k, allowed: spec.flags.map((f) => `--${f}`) });
+    }
+    if (flags[k] === true && !BOOL_FLAGS.has(k)) throw new CliError(EXIT.usage, 'usage', `--${k} needs a value.`, { flag: k });
+    if (flags[k] !== true && BOOL_FLAGS.has(k) && !['json', 'text', 'help', 'version'].includes(k) && !/^(true|1|yes)$/i.test(String(flags[k]))) {
+      throw new CliError(EXIT.usage, 'usage', `--${k} takes no value.`, { flag: k });
+    }
+  }
+  if (pos.length > spec.pos) throw new CliError(EXIT.usage, 'usage', `"${key}" does not take "${pos.slice(spec.pos).join(' ')}". Run indianopinion ${cmd} --help.`, { extra: pos.slice(spec.pos) });
+}
+
+/**
+ * An ISO 8601 date or date-time (the forms the API accepts) as a Unix time in ms, or null. A
+ * value without a zone is read as UTC by the API; "yesterday" and other free text are refused.
+ */
+export function isoTime(v) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,9})?)?)?(Z|[+-]\d{2}:?\d{2})?$/i.exec(String(v).trim());
+  if (!m) return null;
+  const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+  if (d.getUTCMonth() !== +m[2] - 1 || d.getUTCDate() !== +m[3]) return null;
+  if (m[4] !== undefined && (+m[4] > 23 || +m[5] > 59 || +(m[6] || 0) > 59)) return null;
+  let iso = String(v).trim();
+  if (m[4] === undefined) iso = `${m[1]}-${m[2]}-${m[3]}T00:00:00${m[7] || 'Z'}`;
+  else if (!m[7]) iso += 'Z';
+  else if (/^[+-]\d{4}$/.test(m[7])) iso = iso.slice(0, -2) + ':' + iso.slice(-2);
+  const t = Date.parse(iso);
+  return Number.isNaN(t) ? null : t;
+}
+
+/** -1, 0 or 1 for two dotted versions (pre-release suffixes are ignored). */
+export function compareVersions(a, b) {
+  const pa = String(a).split('-')[0].split('.').map(Number);
+  const pb = String(b).split('-')[0].split('.').map(Number);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const x = pa[i] || 0; const y = pb[i] || 0;
+    if (x !== y) return x < y ? -1 : 1;
+  }
+  return 0;
 }
 
 class CliError extends Error {
@@ -181,14 +265,15 @@ Indian Opinion publishes short briefs on Indian news, each synthesised from seve
 
 - \`indianopinion briefs --q "bengaluru metro" --limit 10\`: search published briefs (no account needed)
 - \`indianopinion brief <url-or-id>\`: one brief with coverage and sources (no account needed)
-- \`indianopinion login start --email <address>\`, then \`indianopinion login verify --email <address> --code <6 digits>\`: sign up; the token is stored at ~/.config/indianopinion/token. Verifying subscribes that address to the daily digest.
+- \`indianopinion login start --email <address>\`, then \`indianopinion login verify --email <address> --code <6 digits>\`: sign up; the token is stored at ~/.config/indianopinion/token. Verifying a new address switches on the daily digest and Breaking News (up to 5 a day).
 - \`indianopinion digest\`: today's digest; \`--date YYYY-MM-DD\` for another day
 - \`indianopinion topics follow "Supreme Court" --tier instant\`, \`topics list\`, \`topics unfollow <topic_id>\`
 - \`indianopinion breaking recent --days 7\`, \`breaking set --threshold 0.4 --composite mean --max-per-day 3\`
 - \`indianopinion prefs set --format text --hour 7\`
-- \`indianopinion unsubscribe --what digest --yes\`
+- \`indianopinion unsubscribe --what all --yes\`: stop every email (digest, Breaking News, topics, reminders); \`--what digest\` or \`--what breaking\` stops one
+- \`indianopinion account close --yes\`: close the account (tokens revoked, emails stopped; deactivation, not deletion)
 
-Exit codes: 0 ok, 2 usage, 3 auth, 4 not found, 5 rate limited (wait retry_after), 6 validation, 7 network, 8 choose an option.
+Exit codes: 0 ok, 2 usage (including an unknown flag), 3 auth, 4 not found, 5 rate limited (wait retry_after), 6 validation, 7 network, 8 choose an option.
 
 ## Rules
 
@@ -243,7 +328,7 @@ function printText(cmd, data) {
       if (data.breaking) { const b = data.breaking; w(`Breaking: ${b.on ? 'on' : 'off'}, ${b.composite} >= ${b.threshold}, max ${b.max_per_day} a day${data.sent_last_24h !== undefined ? `; ${data.sent_last_24h} in the last 24 hours` : ''}`); return; }
       break;
     case 'login':
-      if (data.token) { w(`Signed in. Token stored at ${data.token_file} (mode 0600).`); w(`Token (shown once): ${data.token}`); w('The verified address gets the daily digest; "indianopinion unsubscribe --what digest --yes" stops it.'); return; }
+      if (data.token) { w(`Signed in. Token stored at ${data.token_file} (mode 0600).`); w(`Token (shown once): ${data.token}`); w(data.account && data.account.new_account === false ? 'This address already had an account; its settings are unchanged.' : 'This address now gets the daily digest and Breaking News (up to 5 a day); "indianopinion unsubscribe --what all --yes" stops both.'); return; }
       if (data.sent_to_masked) { w(`Code sent to ${data.sent_to_masked}; it expires in ${Math.round((data.expires_in || 600) / 60)} minutes.`); w('Then: indianopinion login verify --email <address> --code <6 digits>'); return; }
       break;
     case 'token':
@@ -251,6 +336,10 @@ function printText(cmd, data) {
       if (data.token) { w(`New token (shown once): ${data.token}`); return; }
       if (data.revoked !== undefined) { w(data.revoked ? 'Revoked.' : 'No such token.'); return; }
       break;
+    case 'account':
+      w(data.already_closed ? 'The account was already closed.' : 'The account is closed: it cannot sign in, every token is revoked and no more email is sent.');
+      if (data.retention) w(data.retention);
+      return;
     case 'doctor':
       for (const c of data.checks) w(`${c.ok ? 'ok  ' : 'FAIL'} ${c.name}: ${c.detail}`);
       return;
@@ -261,29 +350,56 @@ function printText(cmd, data) {
 
 // ---------------------------------------------------------------- commands
 
+function timeFlag(flags, name) {
+  if (flags[name] === undefined) return undefined;
+  if (isoTime(flags[name]) === null) {
+    throw new CliError(EXIT.validation, 'invalid_field', `--${name} must be an ISO 8601 time such as 2026-10-02T00:00:00Z, or a date such as 2026-10-02; got "${flags[name]}".`, { field: name });
+  }
+  return String(flags[name]);
+}
+
 async function cmdBriefs(flags) {
   const limit = limitOf(flags);
   const a = apiBase(flags);
-  let st = { o: 0, q: flags.q, c: flags.category, s: flags.since };
-  if (flags.cursor) { try { st = JSON.parse(Buffer.from(String(flags.cursor), 'base64url').toString()); } catch { throw usage('That --cursor is not one this CLI printed.'); } }
-  const filtering = !!(st.q || st.c);
+  let st = { o: 0, q: flags.q, c: flags.category, s: timeFlag(flags, 'since'), u: timeFlag(flags, 'until') };
+  if (flags.cursor) {
+    let d = null;
+    try { d = JSON.parse(Buffer.from(String(flags.cursor), 'base64url').toString()); } catch { d = null; }
+    if (!d || typeof d !== 'object') throw usage('That --cursor is not one this CLI or the API printed.');
+    // A cursor straight from the API (io.sh without jq prints those) is its keyset {d, i}; the
+    // filters are then the flags given with it.
+    st = ('d' in d && 'i' in d) ? { ...st, n: String(flags.cursor) } : d;
+  }
+  const filtering = !!(st.q || st.c || st.u);
   // Since 17 October 2026 the route filters and pages itself (q, category, cursor) and
   // answers next_cursor; an origin without that support answers without it, and then the CLI
   // filters a window of the newest 100 as before.
-  let res = await api(flags, 'GET', '/briefs', { query: { limit, since: st.s, q: st.q, category: st.c, cursor: st.n } });
+  let res = await api(flags, 'GET', '/briefs', { query: { limit, since: st.s, until: st.u, q: st.q, category: st.c, cursor: st.n } });
   if ('next_cursor' in res) {
-    const items = (res.items || []).slice(0, limit);
-    return { ok: true, count: items.length, items: items.map((b) => compact(b, a)), next_cursor: res.next_cursor ? Buffer.from(JSON.stringify({ n: res.next_cursor, q: st.q, c: st.c, s: st.s })).toString('base64url') : null };
+    let items = res.items || [];
+    let n = res.next_cursor || null;
+    // Never drop an item between pages: if the API ever returns more than asked
+    // for, continue after the last item kept, not after the last item it sent.
+    if (items.length > limit) {
+      items = items.slice(0, limit);
+      const last = items[items.length - 1];
+      const t = Date.parse(last.published);
+      if (!Number.isNaN(t)) n = Buffer.from(JSON.stringify({ d: new Date(t).toISOString().slice(0, 19).replace('T', ' '), i: Number(last.id) })).toString('base64url');
+    }
+    return { ok: true, count: items.length, items: items.map((b) => compact(b, a)), next_cursor: n ? Buffer.from(JSON.stringify({ n, q: st.q, c: st.c, s: st.s, u: st.u })).toString('base64url') : null };
   }
-  res = await api(flags, 'GET', '/briefs', { query: { limit: filtering ? 100 : Math.min(100, st.o + limit + 1), since: st.s } });
+  res = await api(flags, 'GET', '/briefs', { query: { limit: filtering ? 100 : Math.min(100, (st.o || 0) + limit + 1), since: st.s } });
   let items = res.items || [];
   if (st.q) { const ws = st.q.toLowerCase().split(/\s+/).filter(Boolean); items = items.filter((b) => { const h = [b.title, b.brief, b.section, ...(b.keywords || [])].join(' ').toLowerCase(); return ws.every((x) => h.includes(x)); }); }
   if (st.c) items = items.filter((b) => String(b.section || '').toLowerCase() === String(st.c).toLowerCase());
+  if (st.u) items = items.filter((b) => Date.parse(b.published) < isoTime(st.u));
   const o = st.o || 0;
   const page = items.slice(o, o + limit);
   const more = items.length > o + limit;
   return { ok: true, count: page.length, items: page.map((b) => compact(b, a)), next_cursor: more ? Buffer.from(JSON.stringify({ ...st, o: o + limit })).toString('base64url') : null };
 }
+
+const INCLUDE_FIELDS = ['brief', 'analysis', 'coverage', 'sources'];
 
 async function cmdBrief(pos, flags) {
   const v = pos[0];
@@ -304,9 +420,16 @@ async function cmdBrief(pos, flags) {
       id = j[1];
     }
   }
+  let inc = null;
+  if (flags.include !== undefined) {
+    inc = String(flags.include).split(',').map((x) => x.trim()).filter(Boolean);
+    const bad = inc.filter((x) => !INCLUDE_FIELDS.includes(x));
+    if (!inc.length || bad.length) {
+      throw new CliError(EXIT.validation, 'invalid_field', `--include takes a comma-separated list of ${INCLUDE_FIELDS.join(', ')}; ${bad.length ? `unknown: ${bad.join(', ')}` : 'got nothing'}.`, { field: 'include', allowed: INCLUDE_FIELDS });
+    }
+  }
   const b = await api(flags, 'GET', `/brief/${id}`);
-  if (flags.include) {
-    const inc = String(flags.include).split(',');
+  if (inc) {
     if (!inc.includes('analysis')) delete b.analysis;
     if (!inc.includes('brief')) delete b.brief;
     if (!inc.includes('sources')) delete b.sources;
@@ -324,7 +447,7 @@ async function cmdLogin(sub, flags) {
     if (flags['operator-url']) body.operator_url = flags['operator-url'];
     if (flags.purpose) body.purpose = flags.purpose;
     const r = await api(flags, 'POST', '/agent/start', { body });
-    process.stderr.write('Verifying this address subscribes it to the daily digest; "unsubscribe --what digest --yes" stops it.\n');
+    process.stderr.write('Verifying a new address switches on the daily digest and Breaking News (up to 5 a day); "indianopinion unsubscribe --what all --yes" stops both.\n');
     return r;
   }
   if (sub === 'verify') {
@@ -376,7 +499,8 @@ async function cmdBreaking(sub, pos, flags) {
     return api(flags, 'PATCH', '/agent/preferences', { auth: true, body: { breaking: b } });
   }
   if (sub === 'recent') {
-    const r = await api(flags, 'GET', '/agent/breaking/recent', { auth: true, query: { days: flags.days || 7 } });
+    if (flags.days !== undefined && !/^[1-7]$/.test(String(flags.days))) throw new CliError(EXIT.validation, 'invalid_field', '--days must be 1 to 7.', { field: 'days' });
+    const r = await api(flags, 'GET', '/agent/breaking/recent', { auth: true, query: { days: flags.days || 7, cursor: flags.cursor } });
     let ev = r.events || [];
     if (flags['would-send']) ev = ev.filter((e) => e.would_send);
     return { ...r, events: ev.slice(0, limitOf(flags, LIST_MAX)) };
@@ -415,6 +539,12 @@ async function cmdToken(sub, pos, flags) {
   throw usage('token list | new | revoke');
 }
 
+async function cmdAccount(sub, flags) {
+  if (sub !== 'close') throw usage('account close --yes');
+  needYes(flags, 'account close (revokes every token, stops every email and disables sign-in; deactivation, not deletion)');
+  return api(flags, 'POST', '/agent/close', { auth: true, body: { confirm: true } });
+}
+
 async function cmdDoctor(flags) {
   const checks = [];
   const major = Number(process.versions.node.split('.')[0]);
@@ -427,7 +557,10 @@ async function cmdDoctor(flags) {
   try {
     const r = await fetch(`${siteBase(flags)}/agents/cli/latest.json`, { headers: { 'User-Agent': UA } });
     const j = r.ok ? await r.json() : null;
-    checks.push({ name: 'version', ok: !j || j.version === VERSION, detail: j ? `this ${VERSION}, latest ${j.version}` : `this ${VERSION}` });
+    // Only an older build fails (#4): a from-source or not-yet-published build newer than the
+    // site's latest.json is fine, and says so.
+    const cmp = j && j.version ? compareVersions(VERSION, j.version) : 0;
+    checks.push({ name: 'version', ok: cmp >= 0, detail: !j ? `this ${VERSION}` : cmp < 0 ? `this ${VERSION}, latest ${j.version}: update with npm i -g ${siteBase(flags)}/agents/cli/latest.tgz` : cmp > 0 ? `this ${VERSION}, newer than the published ${j.version}` : `this ${VERSION}, the latest` });
   } catch { checks.push({ name: 'version', ok: true, detail: `this ${VERSION} (latest.json unreachable)` }); }
   return { ok: checks.every((c) => c.ok), checks };
 }
@@ -515,28 +648,29 @@ export async function mcpBridge(flags, { input = process.stdin, output = process
 
 const COMMANDS = [
   { cmd: 'login start', flags: ['--email', '--name', '--operator-url', '--purpose'], auth: false, does: 'email a 6-digit code (alias: signup start)' },
-  { cmd: 'login verify', flags: ['--email', '--code', '--label'], auth: false, does: 'trade the code for a token; stores it (0600). The address gets the daily digest.' },
+  { cmd: 'login verify', flags: ['--email', '--code', '--label'], auth: false, does: 'trade the code for a token; stores it (0600). A new address gets the daily digest and Breaking News (up to 5 a day).' },
   { cmd: 'me', flags: [], auth: true, does: 'the account and its preferences (alias: whoami)' },
   { cmd: 'digest', flags: ['--date YYYY-MM-DD', '--limit'], auth: true, does: 'the daily digest, latest by default' },
-  { cmd: 'briefs', flags: ['--q', '--category', '--since ISO', '--limit', '--cursor'], auth: false, does: 'search published briefs' },
+  { cmd: 'briefs', flags: ['--q', '--category', '--since ISO', '--until ISO', '--limit', '--cursor'], auth: false, does: 'search published briefs' },
   { cmd: 'brief <url|id>', flags: ['--include brief,analysis,coverage,sources'], auth: false, does: 'one brief' },
   { cmd: 'topics list', flags: ['--limit'], auth: true, does: 'followed topics and suggestions' },
   { cmd: 'topics follow <text>', flags: ['--key', '--id', '--tier instant|daily'], auth: true, does: 'follow a topic (exit 8 with options when ambiguous)' },
   { cmd: 'topics unfollow <topic_id>', flags: [], auth: true, does: 'stop following a topic' },
   { cmd: 'breaking status', flags: [], auth: true, does: 'the Breaking News rule and today\'s count' },
   { cmd: 'breaking set', flags: ['--threshold 0..1', '--composite min|mean|geo|breaking', '--max-per-day 1..20', '--on', '--off'], auth: true, does: 'change the rule' },
-  { cmd: 'breaking recent', flags: ['--days 1..7', '--limit', '--would-send'], auth: true, does: 'scored candidates and deliveries' },
+  { cmd: 'breaking recent', flags: ['--days 1..7', '--limit', '--would-send', '--cursor'], auth: true, does: 'scored candidates and deliveries (the API pages windows of more than 500 events: next_cursor)' },
   { cmd: 'breaking show <event_id>', flags: [], auth: true, does: 'one event' },
   { cmd: 'prefs get', flags: [], auth: true, does: 'preferences' },
   { cmd: 'prefs set', flags: ['--format text|json|html', '--hour 7|12|18|21', '--tz', '--digest on|off', '--nudges on|off'], auth: true, does: 'digest format and hour' },
-  { cmd: 'unsubscribe', flags: ['--what digest|breaking|topics|all', '--yes'], auth: true, does: 'stop emails (needs --yes)' },
+  { cmd: 'unsubscribe', flags: ['--what digest|breaking|topics|all', '--yes'], auth: true, does: 'stop emails (needs --yes); all stops every email' },
   { cmd: 'token list', flags: [], auth: true, does: 'your tokens, never the secrets (alias: tokens)' },
   { cmd: 'token new', flags: ['--label'], auth: true, does: 'mint another token (shown once)' },
   { cmd: 'token revoke <id>', flags: ['--yes'], auth: true, does: 'revoke a token' },
   { cmd: 'browser-link', flags: [], auth: true, does: 'one-time browser sign-in link for the human' },
+  { cmd: 'account close', flags: ['--yes'], auth: true, does: 'close the account: tokens revoked, every email stopped, sign-in disabled. Deactivation, not deletion; erasure requests go to hello@indianopinion.org' },
   { cmd: 'mcp', flags: ['--url'], auth: false, does: 'stdio MCP bridge to https://indianopinion.org/mcp with the stored token' },
   { cmd: 'skill install', flags: ['--dir', '--print'], auth: false, does: 'write SKILL.md (default ~/.claude/skills/indianopinion/)' },
-  { cmd: 'doctor', flags: [], auth: false, does: 'check node, token, API reachability and version' },
+  { cmd: 'doctor', flags: [], auth: false, does: 'check node, token, API reachability and version (fails only when this build is older than the published one)' },
 ];
 
 function helpText() {
@@ -548,7 +682,7 @@ ${COMMANDS.map((c) => `  ${(c.cmd + ' ' + c.flags.join(' ')).trimEnd()}\n      $
 
 Environment: IO_TOKEN (token), IO_API (REST base, default ${DEFAULT_API}), IO_MCP_URL, IO_EMAIL, XDG_CONFIG_HOME, NO_COLOR
 Token file: ${tokenFile()} (0600)
-Exit codes: 0 ok, 1 unexpected, 2 usage, 3 auth, 4 not found, 5 rate limited, 6 validation, 7 network or server, 8 needs a choice
+Exit codes: 0 ok, 1 unexpected, 2 usage (an unknown flag too), 3 auth, 4 not found, 5 rate limited, 6 validation, 7 network or server, 8 needs a choice
 `;
 }
 
@@ -572,6 +706,7 @@ export async function main(argv) {
     return 0;
   }
   try {
+    checkArgs(cmd, sub, rest, flags);
     let data;
     switch (cmd) {
       case 'login': data = await cmdLogin(sub, flags); break;
@@ -597,6 +732,7 @@ export async function main(argv) {
       }
       case 'token': data = await cmdToken(sub, rest, flags); break;
       case 'browser-link': data = await api(flags, 'POST', '/agent/browser-link', { auth: true }); break;
+      case 'account': data = await cmdAccount(sub, flags); break;
       case 'mcp': await mcpBridge(flags); return 0;
       case 'skill': data = cmdSkill(sub, flags); if (data === null) return 0; break;
       case 'doctor': data = await cmdDoctor(flags); break;

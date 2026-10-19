@@ -11,14 +11,15 @@ Indian Opinion publishes short briefs on Indian news, each synthesised from seve
 
 - `indianopinion briefs --q "bengaluru metro" --limit 10`: search published briefs (no account needed)
 - `indianopinion brief <url-or-id>`: one brief with coverage and sources (no account needed)
-- `indianopinion login start --email <address>`, then `indianopinion login verify --email <address> --code <6 digits>`: sign up; the token is stored at ~/.config/indianopinion/token. Verifying subscribes that address to the daily digest.
+- `indianopinion login start --email <address>`, then `indianopinion login verify --email <address> --code <6 digits>`: sign up; the token is stored at ~/.config/indianopinion/token. Verifying a new address switches on the daily digest and Breaking News (up to 5 a day).
 - `indianopinion digest`: today's digest; `--date YYYY-MM-DD` for another day
 - `indianopinion topics follow "Supreme Court" --tier instant`, `topics list`, `topics unfollow <topic_id>`
 - `indianopinion breaking recent --days 7`, `breaking set --threshold 0.4 --composite mean --max-per-day 3`
 - `indianopinion prefs set --format text --hour 7`
-- `indianopinion unsubscribe --what digest --yes`
+- `indianopinion unsubscribe --what all --yes`: stop every email (digest, Breaking News, topics, reminders); `--what digest` or `--what breaking` stops one
+- `indianopinion account close --yes`: close the account (tokens revoked, emails stopped; deactivation, not deletion)
 
-Exit codes: 0 ok, 2 usage, 3 auth, 4 not found, 5 rate limited (wait retry_after), 6 validation, 7 network, 8 choose an option.
+Exit codes: 0 ok, 2 usage (including an unknown flag), 3 auth, 4 not found, 5 rate limited (wait retry_after), 6 validation, 7 network, 8 choose an option.
 
 ## Rules
 

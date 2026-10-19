@@ -1,7 +1,8 @@
 // Tests for bin/indianopinion.mjs and io.sh against the REST stub. The MCP
 // bridge test runs the io-mcp Worker module in a local HTTP server when the
 // io-mcp Worker source is available: IO_MCP_DIR, or a sibling checkout of
-// https://github.com/IndianOpinion/mcp at ../mcp (or ../io-mcp-worker).
+// https://github.com/IndianOpinion/mcp at ../mcp (or ../io-mcp-worker), with
+// its dependencies installed (npm ci there); otherwise that test is skipped.
 //   node --test test/*.test.mjs
 
 import { test, before, after } from 'node:test';
@@ -50,7 +51,7 @@ after(async () => { await stub.close(); await dead.close(); });
 test('help, version and the machine-readable command list', async () => {
   let r = await run(['--version']);
   assert.equal(r.code, 0);
-  assert.equal(r.json.version, '0.2.0');
+  assert.equal(r.json.version, '0.2.1');
   r = await run(['--help', '--json']);
   assert.equal(r.code, 0);
   assert.ok(r.json.commands.find((c) => c.cmd === 'mcp'));
@@ -93,7 +94,8 @@ test('login start and verify store the token with mode 0600', async () => {
   let r = await run(['login', 'start', '--email', EMAIL, '--name', 'Morning briefer']);
   assert.equal(r.code, 0, r.err);
   assert.equal(r.json.code_length, 6);
-  assert.match(r.err, /daily digest/);
+  assert.match(r.err, /daily digest and Breaking News/);
+  assert.match(r.err, /unsubscribe --what all --yes/);
   r = await run(['login', 'start', '--email', 'nope']);
   assert.equal(r.code, 6);
   assert.equal(r.errJson.error, 'invalid_email');
@@ -141,7 +143,7 @@ test('account commands with the stored token', async () => {
   }
   const sent = stub.requests.filter((q) => q.path.includes('/agent/me'));
   assert.equal(sent.at(-1).headers.authorization, `Bearer ${GOOD_TOKEN}`);
-  assert.match(sent.at(-1).headers['user-agent'], /^indianopinion-cli\/0\.2\.0/);
+  assert.match(sent.at(-1).headers['user-agent'], /^indianopinion-cli\/0\.2\.1/);
 });
 
 test('exit codes: usage, validation, choice, auth, not found, network', async () => {
@@ -227,7 +229,7 @@ test('io.sh: same commands, exit codes and token file', async () => {
     [['digest', '--date', '2026-10-02'], (j) => j.ok],
     [['topics', 'list'], (j) => Array.isArray(j.following)],
     [['topics', 'follow', 'Supreme', 'Court', '--tier', 'instant'], (j) => j.ok],
-    [['breaking', 'status'], (j) => j.preferences.breaking],
+    [['breaking', 'status'], (j) => j.ok && j.breaking.composite && j.sent_last_24h === 1],
     [['breaking', 'set', '--threshold', '0.4', '--composite', 'mean'], (j) => j.preferences.breaking.threshold === 0.4],
     [['breaking', 'recent', '--days', '3'], (j) => j.events.length === 2],
     [['breaking', 'show', '5531'], (j) => j.event_id === 5531],
@@ -249,9 +251,11 @@ test('io.sh: same commands, exit codes and token file', async () => {
 
 test('mcp: stdio bridge to the Worker, stores the token from signup_verify', async (t) => {
   const dirs = [process.env.IO_MCP_DIR && path.resolve(process.env.IO_MCP_DIR), path.join(HERE, '..', '..', 'mcp'), path.join(HERE, '..', '..', 'io-mcp-worker')].filter(Boolean);
-  const workerPath = dirs.map((d) => path.join(d, 'src', 'index.js')).find((f) => fs.existsSync(f));
-  if (!workerPath) { t.skip('io-mcp Worker source not found (set IO_MCP_DIR)'); return; }
-  const { default: worker } = await import(workerPath);
+  const dir = dirs.find((d) => fs.existsSync(path.join(d, 'src', 'index.js')));
+  if (!dir) { t.skip('io-mcp Worker source not found (set IO_MCP_DIR)'); return; }
+  // #14: the source without its dependencies is a skip with a hint, not a failure.
+  if (!fs.existsSync(path.join(dir, 'node_modules', 'agents'))) { t.skip(`run npm ci in ${dir} to run the bridge test`); return; }
+  const { default: worker } = await import(path.join(dir, 'src', 'index.js'));
   const env = { IO_API: stub.api, SITE: stub.url };
   const srv = http.createServer(async (req, res) => {
     let body = '';
@@ -275,7 +279,7 @@ test('mcp: stdio bridge to the Worker, stores the token from signup_verify', asy
   assert.equal(init.result.serverInfo.name, 'indianopinion');
   send({ jsonrpc: '2.0', method: 'notifications/initialized' });
   send({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
-  assert.equal((await waitFor(2)).result.tools.length, 14);
+  assert.equal((await waitFor(2)).result.tools.length, 15);
   send({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'get_account', arguments: {} } });
   assert.equal((await waitFor(3)).result.isError, true, 'no token yet');
   send({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'signup_verify', arguments: { email: EMAIL, code: GOOD_CODE } } });
