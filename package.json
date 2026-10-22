@@ -1,6 +1,6 @@
 {
   "name": "indianopinion",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Indian Opinion from the command line: India news briefs, the daily digest, topic alerts and Breaking News for people and AI agents, plus a stdio MCP bridge",
   "keywords": ["india", "news", "mcp", "agents", "cli", "indian-opinion"],
   "homepage": "https://github.com/IndianOpinion/cli#readme",

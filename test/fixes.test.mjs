@@ -271,7 +271,7 @@ test('#14: the bridge test skips (not fails) when the Worker source has no node_
   const fake = fs.mkdtempSync(path.join(os.tmpdir(), 'io-fake-mcp-'));
   fs.mkdirSync(path.join(fake, 'src'));
   fs.writeFileSync(path.join(fake, 'src', 'index.js'), "import 'agents';\nexport default {};\n");
-  const r = spawnSync(process.execPath, ['--test', '--test-name-pattern=stdio bridge', path.join(HERE, 'cli.test.mjs')], { env: { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => k !== 'NODE_TEST_CONTEXT')), IO_MCP_DIR: fake }, encoding: 'utf8' });
+  const r = spawnSync(process.execPath, ['--test', '--test-reporter=tap', '--test-name-pattern=stdio bridge', path.join(HERE, 'cli.test.mjs')], { env: { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => k !== 'NODE_TEST_CONTEXT')), IO_MCP_DIR: fake }, encoding: 'utf8' });
   assert.equal(r.status, 0, r.stdout.slice(-800));
   assert.match(r.stdout, /# skipped 1/);
   assert.match(r.stdout, /run npm ci in/);

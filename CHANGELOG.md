@@ -4,6 +4,16 @@ All notable changes to the `indianopinion` npm package. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.2.2] - 2026-10-22
+
+### Fixed
+
+- `login start` names `indianopinion login verify --email <address> --code <6 digits>` (in io.sh, `io login verify ...`) as the next step instead of the REST POST, and gives the unsubscribe hint as a full command (#19).
+- `topics unfollow` takes what `topics follow` takes: a topic_id, `--id`, `--key` or the topic name; the follow answer's `next` names the CLI command that undoes it (#20).
+- `doctor` on a fresh install without a token exits 0: the token check is still reported (`ok: false`, `required: false`) and the answer carries `signed_in: false` (#22).
+- `io.sh <command> --help` shows the help and exits 0 (#18); `io.sh` with no arguments exits 2, as the CLI does (#24).
+- The #14 regression test runs its child with the TAP reporter, so `npm test` passes on Node 24 (#17).
+
 ## [0.2.1] - 2026-10-19
 
 ### Added
@@ -55,5 +65,6 @@ distributed only as a tarball from https://indianopinion.org/agents/cli/.
   a terminal.
 - `io.sh`: the same commands for bash and curl, without `mcp` and `skill`.
 
+[0.2.2]: https://github.com/IndianOpinion/cli/releases/tag/v0.2.2
 [0.2.1]: https://github.com/IndianOpinion/cli/releases/tag/v0.2.1
 [0.2.0]: https://github.com/IndianOpinion/cli/releases/tag/v0.2.0

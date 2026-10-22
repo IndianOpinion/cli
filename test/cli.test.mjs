@@ -51,7 +51,7 @@ after(async () => { await stub.close(); await dead.close(); });
 test('help, version and the machine-readable command list', async () => {
   let r = await run(['--version']);
   assert.equal(r.code, 0);
-  assert.equal(r.json.version, '0.2.1');
+  assert.equal(r.json.version, '0.2.2');
   r = await run(['--help', '--json']);
   assert.equal(r.code, 0);
   assert.ok(r.json.commands.find((c) => c.cmd === 'mcp'));
@@ -143,7 +143,7 @@ test('account commands with the stored token', async () => {
   }
   const sent = stub.requests.filter((q) => q.path.includes('/agent/me'));
   assert.equal(sent.at(-1).headers.authorization, `Bearer ${GOOD_TOKEN}`);
-  assert.match(sent.at(-1).headers['user-agent'], /^indianopinion-cli\/0\.2\.1/);
+  assert.match(sent.at(-1).headers['user-agent'], /^indianopinion-cli\/0\.2\.2/);
 });
 
 test('exit codes: usage, validation, choice, auth, not found, network', async () => {

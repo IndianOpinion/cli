@@ -16,7 +16,7 @@
 # Guide: https://indianopinion.org/agents/
 set -uo pipefail
 
-IO_SH_VERSION=0.2.1
+IO_SH_VERSION=0.2.2
 CONF="${XDG_CONFIG_HOME:-$HOME/.config}/indianopinion"
 TOKEN_FILE="$CONF/token"
 UA="indianopinion-io.sh/$IO_SH_VERSION (+https://indianopinion.org/agents/)"
@@ -106,6 +106,7 @@ POS=(); SEEN=()
 parse() {
   while [ $# -gt 0 ]; do
     case "$1" in
+      --help|-h) F_help=1 ;;
       --yes|--on|--off|--would-send|--json|--print) local k=${1#--}; SEEN+=("$k"); k=${k//-/_}; printf -v "F_$k" '%s' 1 ;;
       --text) usage 'io.sh prints JSON only (pipe it to jq for text)' ;;
       --*=*) local k=${1%%=*}; k=${k#--}; SEEN+=("$k"); k=${k//-/_}; printf -v "F_$k" '%s' "${1#*=}" ;;
@@ -142,7 +143,7 @@ io.sh $IO_SH_VERSION: Indian Opinion from bash and curl. Guide: https://indianop
   io digest [--date YYYY-MM-DD] [--limit N]
   io briefs [--q Q] [--category C] [--since ISO] [--until ISO] [--limit N] [--cursor C]   (no account needed)
   io brief <url|id> [--include brief,analysis,coverage,sources]                         (no account needed)
-  io topics list [--limit N] | follow <text> [--tier instant|daily] [--key K] [--id N] | unfollow <topic_id>
+  io topics list [--limit N] | follow <text> [--tier instant|daily] [--key K] [--id N] | unfollow <topic_id|name> [--key K] [--id N]
   io breaking status | set [--threshold 0.4] [--composite mean] [--max-per-day 3] [--on|--off] | recent [--days 7] [--limit N] [--would-send] [--cursor C] | show <event_id>
   io prefs get | set [--format text|json|html] [--hour 7|12|18|21] [--tz Asia/Kolkata] [--digest on|off] [--nudges on|off]
   io unsubscribe --what digest|breaking|topics|all --yes
@@ -156,10 +157,14 @@ Exit codes: 0 ok, 2 usage, 3 auth, 4 not found, 5 rate limited, 6 validation, 7 
 EOF
 }
 
-cmd=${1:-help}; [ $# -gt 0 ] && shift
+# No arguments: help on stdout and exit 2 (usage), as the Node CLI does (#24).
+if [ $# -eq 0 ]; then help; exit 2; fi
+cmd=$1; shift
 sub=${1:-}
-case "$sub" in --*|'') sub='' ;; *) shift ;; esac
+case "$sub" in --*|-h|'') sub='' ;; *) shift ;; esac
 parse "$@"
+# <command> --help shows the help and exits 0, as the Node CLI does (#18).
+if [ -n "${F_help:-}" ]; then help; exit 0; fi
 API="${F_api:-${IO_API:-https://indianopinion.org/wp-json/io/v1}}"
 API="${API%/}"
 SITE=$(printf '%s' "$API" | sed -E 's#^(https?://[^/]+).*#\1#')
@@ -178,7 +183,12 @@ case "$cmd" in
         [ -n "$(f operator_url)" ] && body+=",\"operator_url\":$(jstr "$(f operator_url)")"
         [ -n "$(f purpose)" ] && body+=",\"purpose\":$(jstr "$(f purpose)")"
         echo 'Verifying a new address switches on the daily digest and Breaking News (up to 5 a day); "io unsubscribe --what all --yes" stops both.' >&2
-        call POST /agent/start "$body}" ''; emit "$OUT" ;;
+        call POST /agent/start "$body}" ''
+        # Name the io command as the next step, not the REST call (#19).
+        verify="io login verify --email $email --code <6 digits>"
+        if [ "$HAVE_JQ" = 1 ]; then OUT=$(printf '%s' "$OUT" | jq -c --arg v "$verify" '. + {message: ("A 6-digit code is on its way to that address. Read it from the mailbox, then run: " + $v), next: [{rel: "verify", command: $v}], unsubscribe: "io unsubscribe --what all --yes"}'); fi
+        echo "io: next, run: $verify" >&2
+        emit "$OUT" ;;
       verify)
         allow 'login verify' 0 email code label
         code=$(f code)
@@ -271,7 +281,20 @@ case "$cmd" in
         elif [ ${#POS[@]} -gt 0 ]; then body="{\"text\":$(jstr "${POS[*]}"),\"tier\":\"$tier\"}"
         else usage 'topics follow <text> | --key K | --id N [--tier instant|daily]'; fi
         call POST /agent/topics "$body" auth; emit "$OUT" ;;
-      unfollow) allow 'topics unfollow' 1; [[ ${POS[0]:-} =~ ^[0-9]+$ ]] || usage 'topics unfollow <topic_id>'; call DELETE "/agent/topics/${POS[0]}" '' auth; emit "$OUT" ;;
+      unfollow)
+        # Takes what follow takes: a topic_id, --id, --key or the name; a key or name needs jq (#20).
+        allow 'topics unfollow' any key id
+        want=$(f id); [ -n "$want" ] || want=$(f key); [ -n "$want" ] || want="${POS[*]:-}"
+        [ -n "$want" ] || usage 'topics unfollow <topic_id | name> | --key K | --id N'
+        [ ${#POS[@]} -gt 1 ] && [[ ${POS[0]} =~ ^[0-9]+$ ]] && usage 'topics unfollow takes one topic_id'
+        if [[ $want =~ ^[0-9]+$ ]] && [ -z "$(f key)" ]; then tid=$want
+        else
+          [ "$HAVE_JQ" = 1 ] || usage 'topics unfollow by name or key needs jq; pass the numeric topic_id (io topics list shows it)'
+          call GET /agent/topics '' auth
+          tid=$(printf '%s' "$OUT" | jq -r --arg w "$want" '($w|ascii_downcase) as $w | [((.following // []) + (.suggested // []))[] | select(.topic_id != null and (((.key // "")|ascii_downcase) == $w or ((.name // "")|ascii_downcase) == $w))][0].topic_id // empty')
+          [ -n "$tid" ] || die 4 not_found "No followed topic matches \"$want\". Run io topics list for topic ids."
+        fi
+        call DELETE "/agent/topics/$tid" '' auth; emit "$OUT" ;;
       *) usage 'topics list | follow | unfollow' ;;
     esac ;;
   breaking)
@@ -346,7 +369,8 @@ case "$cmd" in
     add() { checks+=("{\"name\":$(jstr "$1"),\"ok\":$2,\"detail\":$(jstr "$3")}"); [ "$2" = true ] || okall=false; }
     add bash true "$BASH_VERSION"
     add jq true "$( [ "$HAVE_JQ" = 1 ] && echo 'found: output matches the CLI' || echo 'not found: output is the API JSON' )"
-    t=$(token); if [ -n "$t" ]; then add token true "$(printf '%s' "$t" | cut -d_ -f2)"; else add token false 'none; run io login start'; fi
+    # No token is the normal first-run state: reported, not a failure (#22).
+    t=$(token); if [ -n "$t" ]; then add token true "$(printf '%s' "$t" | cut -d_ -f2)"; else checks+=('{"name":"token","ok":false,"required":false,"detail":"none (not signed in); run io login start --email <address>"}'); fi
     if r=$(curl -sS -o /dev/null -w '%{http_code}' -A "$UA" "$API/briefs?limit=1" 2>/dev/null) && [ "$r" = 200 ]; then add 'public api' true "$API"; else add 'public api' false "HTTP ${r:-000} from $API/briefs"; fi
     if r=$(curl -sS -o /dev/null -w '%{http_code}' -A "$UA" "$API/agent" 2>/dev/null) && [ "$r" = 200 ]; then add 'agent api' true answering; else add 'agent api' false "HTTP ${r:-000}"; fi
     if [ -n "$t" ]; then
@@ -356,7 +380,7 @@ case "$cmd" in
     if [ -z "$latest" ]; then add version true "this $IO_SH_VERSION (latest.json unreachable)"
     elif [ "$(printf '%s\n%s\n' "$IO_SH_VERSION" "$latest" | sort -V | head -1)" = "$IO_SH_VERSION" ] && [ "$IO_SH_VERSION" != "$latest" ]; then add version false "this $IO_SH_VERSION, latest $latest: download io.sh again"
     else add version true "this $IO_SH_VERSION, latest $latest"; fi
-    out="{\"ok\":$okall,\"checks\":[$(IFS=,; echo "${checks[*]}")]}"
+    out="{\"ok\":$okall,\"signed_in\":$( [ -n "$t" ] && echo true || echo false ),\"checks\":[$(IFS=,; echo "${checks[*]}")]}"
     emit "$out"; [ "$okall" = true ] || exit 1 ;;
   *) usage "unknown command \"$cmd\"; run io help" ;;
 esac

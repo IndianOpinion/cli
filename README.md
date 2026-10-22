@@ -74,7 +74,7 @@ Errors go to stderr (a JSON object in JSON mode).
 | Exit | Meaning |
 |---|---|
 | 0 | ok |
-| 1 | unexpected |
+| 1 | unexpected, or a `doctor` check failed (a missing token is reported but is not a failure: exit 0, `signed_in: false`) |
 | 2 | usage (including a missing `--yes`) |
 | 3 | auth: no token, or it was refused |
 | 4 | not found |
@@ -82,6 +82,9 @@ Errors go to stderr (a JSON object in JSON mode).
 | 6 | validation |
 | 7 | network or server |
 | 8 | needs a choice (an ambiguous topic; options are listed) |
+
+List commands take `--limit` up to 100, the REST API's page size. The MCP tools (`indianopinion mcp`
+and the remote server) return at most 25 items per call; page on with their cursor.
 
 Token order: `--token` (visible in `ps`, avoid), `IO_TOKEN`, then
 `${XDG_CONFIG_HOME:-~/.config}/indianopinion/token` (written by `login verify` with mode 0600, directory
@@ -121,7 +124,7 @@ One-time setup (an npm owner of the package, on npmjs.com):
    `.github/workflows/publish.yml` is on `main`.
 
 1. Publish the first version by hand, because npm attaches trusted publisher settings to an existing
-   package. From a clean checkout of the newest release tag (`v0.2.1`), on your own machine with 2FA on:
+   package. From a clean checkout of the newest release tag (`v0.2.2`), on your own machine with 2FA on:
    `npm login`, `npm test`, `npm pack --dry-run` (expect `bin/indianopinion.mjs`, `skill/SKILL.md`,
    `README.md`, `LICENSE`, `CHANGELOG.md`, `package.json`), then `npm publish --access public`.
    `publishConfig.provenance` only applies in CI; a local publish ignores it with a warning, or pass

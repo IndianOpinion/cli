@@ -14,7 +14,7 @@ import os from 'node:os';
 import path from 'node:path';
 import readline from 'node:readline';
 
-const VERSION = '0.2.1';
+const VERSION = '0.2.2';
 const DOCS = 'https://indianopinion.org/agents/';
 const UA = `indianopinion-cli/${VERSION} (+${DOCS})`;
 const DEFAULT_API = 'https://indianopinion.org/wp-json/io/v1';
@@ -60,7 +60,7 @@ export const SPEC = {
   brief: { flags: ['include'], pos: 1 },
   'topics list': { flags: ['limit'], pos: 0 },
   'topics follow': { flags: ['key', 'id', 'tier'], pos: Infinity },
-  'topics unfollow': { flags: [], pos: 1 },
+  'topics unfollow': { flags: ['key', 'id'], pos: Infinity },
   'breaking status': { flags: [], pos: 0 },
   'breaking set': { flags: ['threshold', 'composite', 'max-per-day', 'on', 'off'], pos: 0 },
   'breaking recent': { flags: ['days', 'limit', 'would-send', 'cursor'], pos: 0 },
@@ -267,7 +267,7 @@ Indian Opinion publishes short briefs on Indian news, each synthesised from seve
 - \`indianopinion brief <url-or-id>\`: one brief with coverage and sources (no account needed)
 - \`indianopinion login start --email <address>\`, then \`indianopinion login verify --email <address> --code <6 digits>\`: sign up; the token is stored at ~/.config/indianopinion/token. Verifying a new address switches on the daily digest and Breaking News (up to 5 a day).
 - \`indianopinion digest\`: today's digest; \`--date YYYY-MM-DD\` for another day
-- \`indianopinion topics follow "Supreme Court" --tier instant\`, \`topics list\`, \`topics unfollow <topic_id>\`
+- \`indianopinion topics follow "Supreme Court" --tier instant\`, \`topics list\`, \`topics unfollow <topic_id | name>\`
 - \`indianopinion breaking recent --days 7\`, \`breaking set --threshold 0.4 --composite mean --max-per-day 3\`
 - \`indianopinion prefs set --format text --hour 7\`
 - \`indianopinion unsubscribe --what all --yes\`: stop every email (digest, Breaking News, topics, reminders); \`--what digest\` or \`--what breaking\` stops one
@@ -448,7 +448,14 @@ async function cmdLogin(sub, flags) {
     if (flags.purpose) body.purpose = flags.purpose;
     const r = await api(flags, 'POST', '/agent/start', { body });
     process.stderr.write('Verifying a new address switches on the daily digest and Breaking News (up to 5 a day); "indianopinion unsubscribe --what all --yes" stops both.\n');
-    return r;
+    // The API's own message and next block name the REST call; an agent using the CLI gets the CLI command (#19).
+    const verify = `indianopinion login verify --email ${email} --code <6 digits>`;
+    return {
+      ...r,
+      message: `A 6-digit code is on its way to that address. Read it from the mailbox, then run: ${verify}`,
+      next: [{ rel: 'verify', command: verify }],
+      unsubscribe: 'indianopinion unsubscribe --what all --yes',
+    };
   }
   if (sub === 'verify') {
     if (!email || !flags.code) throw usage('login verify --email <address> --code <6 digits> [--label L]');
@@ -474,11 +481,28 @@ async function cmdTopics(sub, pos, flags) {
     else if (flags.id) body.topic_id = Number(flags.id);
     else if (pos.length) body.text = pos.join(' ');
     else throw usage('topics follow <text> | --key K | --id N [--tier instant|daily]');
-    return api(flags, 'POST', '/agent/topics', { auth: true, body });
+    const r = await api(flags, 'POST', '/agent/topics', { auth: true, body });
+    const id = r && r.subscription && r.subscription.topic_id;
+    // The follow answer names the CLI command that undoes it (#20).
+    if (id) r.next = [...(Array.isArray(r.next) ? r.next : []), { rel: 'unfollow', command: `indianopinion topics unfollow ${id}` }];
+    return r;
   }
   if (sub === 'unfollow') {
-    if (!/^\d+$/.test(pos[0] || '')) throw usage('topics unfollow <topic_id>');
-    return api(flags, 'DELETE', `/agent/topics/${pos[0]}`, { auth: true });
+    // Takes what follow takes: a topic_id, --id, --key, or the topic name (#20).
+    const want = flags.id !== undefined ? String(flags.id) : flags.key !== undefined ? String(flags.key) : pos.join(' ').trim();
+    if (!want) throw usage('topics unfollow <topic_id | name> | --key K | --id N');
+    if (pos.length > 1 && pos.every((x) => /^\d+$/.test(x))) throw usage('topics unfollow takes one topic_id');
+    let id = /^\d+$/.test(want) && flags.key === undefined ? want : null;
+    if (!id) {
+      const list = await api(flags, 'GET', '/agent/topics', { auth: true });
+      const all = [...(list.following || []), ...(list.suggested || [])];
+      const w = want.toLowerCase();
+      const hit = all.find((t) => t.topic_id && ((t.key && String(t.key).toLowerCase() === w) || (t.name && String(t.name).toLowerCase() === w)))
+        || (list.following || []).find((t) => t.topic_id && t.name && String(t.name).toLowerCase().includes(w));
+      if (!hit) throw new CliError(EXIT.notfound, 'not_found', `No followed topic matches "${want}". Run "indianopinion topics list" for topic ids.`);
+      id = String(hit.topic_id);
+    }
+    return api(flags, 'DELETE', `/agent/topics/${id}`, { auth: true });
   }
   throw usage('topics list | follow | unfollow');
 }
@@ -550,7 +574,8 @@ async function cmdDoctor(flags) {
   const major = Number(process.versions.node.split('.')[0]);
   checks.push({ name: 'node', ok: major >= 20, detail: process.versions.node });
   const t = readToken(flags);
-  checks.push({ name: 'token', ok: !!t, detail: t ? `${t.startsWith('ioa_') ? t.split('_')[1] : 'not an ioa_ token'} (${env.IO_TOKEN ? 'IO_TOKEN' : flags.token ? '--token' : tokenFile()})` : 'none; run login start' });
+  // No token is the normal first-run state, reported but not a failure (#22): exit 0, signed_in false.
+  checks.push({ name: 'token', ok: !!t, required: false, detail: t ? `${t.startsWith('ioa_') ? t.split('_')[1] : 'not an ioa_ token'} (${env.IO_TOKEN ? 'IO_TOKEN' : flags.token ? '--token' : tokenFile()})` : 'none (not signed in); run indianopinion login start --email <address>' });
   try { await api(flags, 'GET', '/briefs', { query: { limit: 1 } }); checks.push({ name: 'public api', ok: true, detail: apiBase(flags) }); } catch (e) { checks.push({ name: 'public api', ok: false, detail: e.message }); }
   try { await api(flags, 'GET', '/agent'); checks.push({ name: 'agent api', ok: true, detail: 'answering' }); } catch (e) { checks.push({ name: 'agent api', ok: false, detail: e.message }); }
   if (t) { try { await api(flags, 'GET', '/agent/me', { auth: true }); checks.push({ name: 'token valid', ok: true, detail: 'accepted' }); } catch (e) { checks.push({ name: 'token valid', ok: false, detail: e.message }); } }
@@ -562,7 +587,7 @@ async function cmdDoctor(flags) {
     const cmp = j && j.version ? compareVersions(VERSION, j.version) : 0;
     checks.push({ name: 'version', ok: cmp >= 0, detail: !j ? `this ${VERSION}` : cmp < 0 ? `this ${VERSION}, latest ${j.version}: update with npm i -g ${siteBase(flags)}/agents/cli/latest.tgz` : cmp > 0 ? `this ${VERSION}, newer than the published ${j.version}` : `this ${VERSION}, the latest` });
   } catch { checks.push({ name: 'version', ok: true, detail: `this ${VERSION} (latest.json unreachable)` }); }
-  return { ok: checks.every((c) => c.ok), checks };
+  return { ok: checks.every((c) => c.ok || c.required === false), signed_in: !!t, checks };
 }
 
 function cmdSkill(sub, flags) {
@@ -655,7 +680,7 @@ const COMMANDS = [
   { cmd: 'brief <url|id>', flags: ['--include brief,analysis,coverage,sources'], auth: false, does: 'one brief' },
   { cmd: 'topics list', flags: ['--limit'], auth: true, does: 'followed topics and suggestions' },
   { cmd: 'topics follow <text>', flags: ['--key', '--id', '--tier instant|daily'], auth: true, does: 'follow a topic (exit 8 with options when ambiguous)' },
-  { cmd: 'topics unfollow <topic_id>', flags: [], auth: true, does: 'stop following a topic' },
+  { cmd: 'topics unfollow <topic_id | name>', flags: ['--key', '--id'], auth: true, does: 'stop following a topic' },
   { cmd: 'breaking status', flags: [], auth: true, does: 'the Breaking News rule and today\'s count' },
   { cmd: 'breaking set', flags: ['--threshold 0..1', '--composite min|mean|geo|breaking', '--max-per-day 1..20', '--on', '--off'], auth: true, does: 'change the rule' },
   { cmd: 'breaking recent', flags: ['--days 1..7', '--limit', '--would-send', '--cursor'], auth: true, does: 'scored candidates and deliveries (the API pages windows of more than 500 events: next_cursor)' },
